@@ -61,7 +61,7 @@ type RaftLog struct {
 // 初始化并恢复的是stabled之前的所有日志
 func newLog(storage Storage) *RaftLog {
 	// Your Code Here (2A).Done
-	// reference:
+	// reference: https://github.com/etcd-io/raft/blob/main/log.go#L68
 	firstIndex, err := storage.FirstIndex()
 	if err != nil {
 		panic(err)
