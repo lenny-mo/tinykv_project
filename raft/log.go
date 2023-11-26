@@ -19,7 +19,7 @@ import pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 // RaftLog manage the log entries, its struct look like:
 //
 //	snapshot/first.....applied....committed....stabled.....last
-//	--------|------------------------------------------------|
+//	--------|--i-----------------------------------i-----------|
 //	                          log entries
 //
 // for simplify the RaftLog implement should manage all log entries
@@ -53,7 +53,7 @@ type RaftLog struct {
 	pendingSnapshot *pb.Snapshot
 
 	// Your Data Here (2A).
-	dummyIndex uint64 // 头结点
+	firstIndex uint64 // 头结点
 }
 
 // newLog returns log using the given storage. It recovers the log
@@ -76,10 +76,11 @@ func newLog(storage Storage) *RaftLog {
 	}
 	return &RaftLog{storage: storage,
 		entries:    entries,
-		committed:  firstIndex - 1,
-		applied:    firstIndex - 1,
+		committed:  firstIndex - 1, // 没有任何日志被提交
+		applied:    firstIndex - 1, // 没有任何日志被应用
 		stabled:    lastIndex,
-		dummyIndex: firstIndex - 1}
+		firstIndex: firstIndex, // 日志中的第一个条目
+	}
 }
 
 // We need to compact the log entries in some point of time like
@@ -105,8 +106,21 @@ func (l *RaftLog) unstableEntries() []pb.Entry {
 
 // nextEnts returns all the committed but not applied entries
 func (l *RaftLog) nextEnts() (ents []pb.Entry) {
-	// Your Code Here (2A).
-	return nil
+	// Your Code Here (2A).DONE
+	// 这个函数类似ETCD的nextCommittedEnts，只不过是allowUnstable设置为false
+	// reference: https://github.com/etcd-io/raft/blob/main/log.go#L216
+
+	// lo = l.applied+1-l.firstIndex 因为需要跳过当前的applied
+	// hi = l.committed+1-l.firstIndex 因为golang的slice是左闭右开的
+	lo, hi := l.applied+1-l.firstIndex, l.committed+1-l.firstIndex
+	// 没有可应用的日志条目。
+	if lo >= hi {
+		return nil
+	}
+
+	//TODO：需要给raftlog添加一个maxApplyingEntsSize，比较返回的entries爆内存，防止OOM
+	// reference: https://github.com/etcd-io/raft/blob/main/log.go#L216
+	return l.entries[lo:hi]
 }
 
 // LastIndex return the last index of the log entries
