@@ -18,9 +18,9 @@ import pb "github.com/pingcap-incubator/tinykv/proto/pkg/eraftpb"
 
 // RaftLog manage the log entries, its struct look like:
 //
-//  snapshot/first.....applied....committed....stabled.....last
-//  --------|------------------------------------------------|
-//                            log entries
+//	snapshot/first.....applied....committed....stabled.....last
+//	--------|------------------------------------------------|
+//	                          log entries
 //
 // for simplify the RaftLog implement should manage all log entries
 // that not truncated
@@ -43,6 +43,9 @@ type RaftLog struct {
 	stabled uint64
 
 	// all entries that have not yet compact.
+	// 包含了持久化和未持久化的数据；
+	// 但是在etcd中，这个结构被拆成两个部分，
+	// 其中没有被持久化的部分称为unstable，被持久化的部分称为storage
 	entries []pb.Entry
 
 	// the incoming unstable snapshot, if any.
@@ -50,13 +53,33 @@ type RaftLog struct {
 	pendingSnapshot *pb.Snapshot
 
 	// Your Data Here (2A).
+	dummyIndex uint64 // 头结点
 }
 
 // newLog returns log using the given storage. It recovers the log
 // to the state that it just commits and applies the latest snapshot.
+// 初始化并恢复的是stabled之前的所有日志
 func newLog(storage Storage) *RaftLog {
-	// Your Code Here (2A).
-	return nil
+	// Your Code Here (2A).Done
+	// reference:
+	firstIndex, err := storage.FirstIndex()
+	if err != nil {
+		panic(err)
+	}
+	lastIndex, err := storage.LastIndex()
+	if err != nil {
+		panic(err)
+	}
+	entries, err := storage.Entries(firstIndex, lastIndex+1) // 获取 [firstIndex, lastIndex] 之间的数据
+	if err != nil {
+		panic(err)
+	}
+	return &RaftLog{storage: storage,
+		entries:    entries,
+		committed:  firstIndex - 1,
+		applied:    firstIndex - 1,
+		stabled:    lastIndex,
+		dummyIndex: firstIndex - 1}
 }
 
 // We need to compact the log entries in some point of time like
