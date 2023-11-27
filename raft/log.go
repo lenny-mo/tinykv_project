@@ -93,19 +93,16 @@ func (l *RaftLog) maybeCompact() {
 // allEntries return all the entries not compacted.
 // note, exclude any dummy entries from the return value.
 // note, this is one of the test stub functions you need to implement.
+// 返回l.entries 中的所有持久以及未持久的日志条目，注意
 func (l *RaftLog) allEntries() []pb.Entry {
 	// Your Code Here (2A).DONE
 	entries := []pb.Entry{}
 
-	// 遍历所有日志条目，跳过虚拟条目
-	for _, entry := range l.entries {
-		if entry.EntryType != pb.EntryType_EntryNormal {
-			continue // 跳过虚拟条目
-		}
-		entries = append(entries, entry)
-	}
+	// 遍历所有日志条目，跳过虚拟条目, 在etcd中底层调用了slice方法
+	// 这里不建议对pb.EntryType_EntryNormal进行判断
+	// reference: https://github.com/etcd-io/raft/blob/main/log.go#L491
+	entries = append(entries, l.entries...)
 
-	// 返回未压缩的日志条目
 	return entries
 }
 
@@ -129,7 +126,7 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 		return nil
 	}
 
-	//TODO：需要给raftlog添加一个maxApplyingEntsSize，比较返回的entries爆内存，防止OOM
+	//TODO：需要给raftlog添加一个maxApplyingEntsSize，防止返回的entries爆内存，防止OOM
 	// reference: https://github.com/etcd-io/raft/blob/main/log.go#L216
 	return l.entries[lo:hi]
 }
