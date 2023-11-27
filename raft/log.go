@@ -107,9 +107,15 @@ func (l *RaftLog) allEntries() []pb.Entry {
 }
 
 // unstableEntries return all the unstable entries
+// unstableEntries 范围在stable+1 ～ last之间
 func (l *RaftLog) unstableEntries() []pb.Entry {
 	// Your Code Here (2A).
-	return nil
+	// 注意防止slice下标越界
+	if len(l.entries) > 0 {
+		return l.entries[l.stabled-l.firstIndex+1:]
+	} else {
+		return nil
+	}
 }
 
 // nextEnts returns all the committed but not applied entries
