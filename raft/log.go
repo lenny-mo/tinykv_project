@@ -53,7 +53,7 @@ type RaftLog struct {
 	pendingSnapshot *pb.Snapshot
 
 	// Your Data Here (2A).
-	firstIndex uint64 // 头结点
+	firstIndex uint64 // 第一条日志的日志id
 }
 
 // newLog returns log using the given storage. It recovers the log
@@ -78,8 +78,8 @@ func newLog(storage Storage) *RaftLog {
 		entries:    entries,
 		committed:  firstIndex - 1, // 没有任何日志被提交
 		applied:    firstIndex - 1, // 没有任何日志被应用
-		stabled:    lastIndex,
-		firstIndex: firstIndex, // 日志中的第一个条目
+		stabled:    lastIndex,      // 从存储中恢复的日志中最后一条日志
+		firstIndex: firstIndex,     // 日志中的第一个条目
 	}
 }
 
@@ -140,7 +140,21 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 // LastIndex return the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
 	// Your Code Here (2A).
-	return 0
+	// 先检查pendingSnapshot 是否存在，如果有则返回pendingSnapshot 的最后一条记录
+	// 否则返回stabled中的最后一条
+	// etcd中也是首先尝试从 unstable 部分获取最后一个条目的索引
+	// reference: https://github.com/etcd-io/raft/blob/main/log.go#L307
+	if !IsEmptySnap(l.pendingSnapshot) {
+		return l.pendingSnapshot.Metadata.Index // snapshotmetadata 中包含了最后一条日志的term id 以及 log id
+	}
+	if len(l.entries) > 0 {
+		return l.entries[len(l.entries)-1].Index
+	}
+	i, err := l.storage.LastIndex()
+	if err != nil {
+		return 0
+	}
+	return i
 }
 
 // Term return the term of the entry in the given index
