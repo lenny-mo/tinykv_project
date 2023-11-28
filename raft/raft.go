@@ -251,7 +251,7 @@ func (r *Raft) sendHeartbeat(to uint64) {
 // raft中的逻辑时钟，会触发不同的事件，如发起选举、发送心跳、处理领导者转移
 // 这些事件的触发是基于时间的
 func (r *Raft) tick() {
-	// Your Code Here (2A)*.
+	// Your Code Here (2A).DONE
 	switch r.State {
 	case StateFollower:
 		r.triggerElection()
@@ -293,6 +293,7 @@ func (r *Raft) triggerTransfer() {
 
 }
 
+// 
 func (r *Raft) heartbeat() {
 	r.heartbeatElapsed++
 	if r.heartbeatElapsed >= r.heartbeatTimeout {
@@ -305,6 +306,7 @@ func (r *Raft) heartbeat() {
 // becomeFollower transform this peer's state to Follower
 func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	// Your Code Here (2A).
+	
 }
 
 // becomeCandidate transform this peer's state to candidate
