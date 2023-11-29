@@ -109,7 +109,7 @@ func (l *RaftLog) allEntries() []pb.Entry {
 // unstableEntries return all the unstable entries
 // unstableEntries 范围在stable+1 ～ last之间
 func (l *RaftLog) unstableEntries() []pb.Entry {
-	// Your Code Here (2A).
+	// Your Code Here (2A).DONE
 	// 注意防止slice下标越界
 	if len(l.entries) > 0 {
 		return l.entries[l.stabled-l.firstIndex+1:]
@@ -139,7 +139,7 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 
 // LastIndex return the last index of the log entries
 func (l *RaftLog) LastIndex() uint64 {
-	// Your Code Here (2A).
+	// Your Code Here (2A).DONE
 	// 先检查pendingSnapshot 是否存在，如果有则返回pendingSnapshot 的最后一条记录
 	// 否则返回stabled中的最后一条
 	// etcd中也是首先尝试从 unstable 部分获取最后一个条目的索引
@@ -158,7 +158,35 @@ func (l *RaftLog) LastIndex() uint64 {
 }
 
 // Term return the term of the entry in the given index
+// 根据给定的index找到日志条目，返回字段Term
 func (l *RaftLog) Term(i uint64) (uint64, error) {
-	// Your Code Here (2A).
-	return 0, nil
+	// Your Code Here (2A).DONE
+	// 参考etcd term func
+	// reference: https://github.com/etcd-io/raft/blob/main/log.go#L381
+	// 1 从内存获取 term, 如果存在的话
+	// 只要 i 在entries 的日志索引范围内
+	if len(l.entries) > 0 && i >= l.firstIndex && i <= l.entries[len(l.entries)-1].Index {
+		return l.entries[i-l.firstIndex].Term, nil
+	}
+
+	// 2 检查pendingsnapshot 是否存在这个索引的日志
+	// snapshot 保存了最后一个日志的index和term
+	if !IsEmptySnap(l.pendingSnapshot) && i == l.pendingSnapshot.Metadata.Index {
+		return l.pendingSnapshot.Metadata.Term, nil
+	}
+
+	// 3 如果在内存中取不到数据，尝试从storage中获取
+	// 知所以把storage放到最后，是因为这涉及到磁盘IO，尽量把操作最慢的步骤放到最后
+	term, err := l.storage.Term(i)
+	if err != nil {
+		if err == ErrCompacted || err == ErrUnavailable {
+			//
+			return 0, err
+		} else {
+			// TODO:在etcd中这里应该panic, 但是，目前尚不清楚是否应该直接panic
+			return 0, err
+		}
+	}
+
+	return term, nil
 }
