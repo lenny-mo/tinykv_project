@@ -117,6 +117,8 @@ func (c *Config) validate() error {
 // Progress represents a follower’s progress in the view of the leader. Leader maintains
 // progresses of all followers, and sends entries to the follower based on its progress.
 type Progress struct {
+	// Match追随者已知的与领导者一致的最高日志条目的索引
+	// Next 领导者下一次尝试发送给追随者的日志条目的索引
 	Match, Next uint64
 }
 
@@ -147,6 +149,7 @@ type Raft struct {
 	// heartbeat interval, should send
 	heartbeatTimeout int
 	// baseline of election interval
+	// 需要增加随机时间
 	electionTimeout int
 	// new item
 	// baseline of transfer leader timeout
@@ -162,7 +165,8 @@ type Raft struct {
 	// number of ticks since it reached last transferTimeout.
 	transferElapsed int
 
-	// leadTransferee is id of the leader transfer target when its value is not zero.
+	// leadTransferee is id of the leader transfer target
+	// when its value is not zero.
 	// Follow the procedure defined in section 3.10 of Raft phd thesis.
 	// (https://web.stanford.edu/~ouster/cgi-bin/papers/OngaroPhD.pdf)
 	// (Used in 3A leader transfer)
@@ -175,6 +179,7 @@ type Raft struct {
 	// be proposed if the leader's applied index is greater than this
 	// value.
 	// (Used in 3A conf change)
+	// 存储了最新一个尚未应用的配置变更的日志条目索引
 	PendingConfIndex uint64
 }
 
@@ -195,7 +200,7 @@ func newRaft(c *Config) *Raft {
 		RaftLog:          newLog(c.Storage),          // 创建 Raft 日志，并设置存储引擎
 	}
 
-	// 读取存储的状态
+	// 读取持久化状态和集群的配置信息
 	hardstate, confstate, err := raft.RaftLog.storage.InitialState()
 	if err != nil {
 		panic(err)
@@ -244,19 +249,21 @@ func (r *Raft) sendAppend(to uint64) bool {
 // sendHeartbeat sends a heartbeat RPC to the given peer.
 func (r *Raft) sendHeartbeat(to uint64) {
 	// Your Code Here (2A).
+
 }
 
 // tick advances the internal logical clock by a single tick.
 //
 // raft中的逻辑时钟，会触发不同的事件，如发起选举、发送心跳、处理领导者转移
-// 这些事件的触发是基于时间的
+// 这些事件的触发是基于tick函数
 func (r *Raft) tick() {
 	// Your Code Here (2A).DONE
+	// 根据 Raft 节点当前的状态执行不同的操作
 	switch r.State {
 	case StateFollower:
-		r.triggerElection()
+		r.triggerElection() // 执行选举超时逻辑，可能会使 Follower 变成 Candidate
 	case StateCandidate:
-		r.triggerElection()
+		r.triggerElection() // 执行选举超时逻辑，Candidate 会尝试成为 Leader 或重新发起选举
 	case StateLeader:
 		// 如果当前结点正处于领导转移状态
 		if r.leadTransferee != None {
@@ -280,24 +287,21 @@ func (r *Raft) triggerElection() {
 //
 // 触发leader转移的条件：进行负载均衡换主 or  leader要下线
 func (r *Raft) triggerTransfer() {
-	// 1 停止接收client 的请求
-	// 2 日志复制到对方leader
-	// 3 TimeoutNow 请求发送到对方leader，并且对方leader会立即返回一个响应 which termIndex+1
-
+	// 在领导权转移过程中，如果在transferElapsed时间内没有完成转移，那么认为转移失败。
 	r.transferElapsed++
 	if r.transferElapsed >= r.transferTimeout {
 		r.transferElapsed = 0
 		// 超时终止领导者转移
+		// 将 leadTransferee 设置为 None，表示当前没有进行领导权转移的目标节点。
+		// leadTransferee 是记录领导权转移目标节点 ID 的变量，如果为 None 表示没有进行中的领导权转移。
 		r.leadTransferee = None
 	}
-
 }
 
-// 
 func (r *Raft) heartbeat() {
 	r.heartbeatElapsed++
 	if r.heartbeatElapsed >= r.heartbeatTimeout {
-		// 发送心跳包 发送leader心跳
+		// 发送心跳包 发送leader心跳信息
 		r.heartbeatElapsed = 0
 		r.Step(pb.Message{MsgType: pb.MessageType_MsgBeat})
 	}
@@ -305,8 +309,35 @@ func (r *Raft) heartbeat() {
 
 // becomeFollower transform this peer's state to Follower
 func (r *Raft) becomeFollower(term uint64, lead uint64) {
-	// Your Code Here (2A).
-	
+	// Your Code Here (2A).DONE
+	// 根据etcd的做法，重点是reset函数，内部进行了多个状态的重置
+	// reference: https://github.com/etcd-io/raft/blob/main/raft.go#L864
+	// reference: reset方法是becomefollower的重点
+	r.State = StateFollower
+	r.Lead = lead
+	r.Term = term
+	r.Vote = None // 意味着一个新的任期已经开始，选票重新设置为r
+	// 重置选举和心跳的时间进度
+	r.electionElapsed = 0
+	r.heartbeatElapsed = 0
+	// 重新设置选举超时时间；这个字段在newraft函数内会初始化
+	r.electionTimeout = r.electionTimeout + rand.Intn(r.electionTimeout)
+	// 如果存在leader转移，终止
+	if r.leadTransferee != None {
+		r.leadTransferee = None
+		r.transferElapsed = 0
+	}
+	// 重置所有结点的进度, 和newraft函数内的差不多
+	for i, ptr := range r.Prs {
+		ptr.Match = 0 // 没有匹配记录
+		ptr.Next = r.RaftLog.LastIndex() + 1
+		if i == r.id {
+			ptr.Match = r.RaftLog.LastIndex()
+		}
+	}
+
+	// 正在进行的配置变更（由该节点发起）都应该被重置或放弃，因为它不再有权力完成这些变更
+	r.PendingConfIndex = 0
 }
 
 // becomeCandidate transform this peer's state to candidate
