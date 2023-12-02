@@ -48,6 +48,7 @@ type RaftLog struct {
 	// 其中没有被持久化的部分称为unstable，被持久化的部分称为storage
 	entries []pb.Entry
 
+	// reference: 参考etcd unstable结构体的snapshot字段 https://github.com/etcd-io/raft/blob/main/log_unstable.go#L33
 	// the incoming unstable snapshot, if any.
 	// (Used in 2C)
 	pendingSnapshot *pb.Snapshot
@@ -62,7 +63,7 @@ type RaftLog struct {
 func newLog(storage Storage) *RaftLog {
 	// Your Code Here (2A).Done
 	// reference: https://github.com/etcd-io/raft/blob/main/log.go#L68
-	firstIndex, err := storage.FirstIndex()
+	firstIndex, err := storage.FirstIndex() // 不一定是1
 	if err != nil {
 		panic(err)
 	}
@@ -93,13 +94,12 @@ func (l *RaftLog) maybeCompact() {
 // allEntries return all the entries not compacted.
 // note, exclude any dummy entries from the return value.
 // note, this is one of the test stub functions you need to implement.
-// 返回l.entries 中的所有持久以及未持久的日志条目，注意
+// 返回l.entries 中的所有持久以及未持久的日志条目
 func (l *RaftLog) allEntries() []pb.Entry {
 	// Your Code Here (2A).DONE
 	entries := []pb.Entry{}
 
-	// 遍历所有日志条目，跳过虚拟条目, 在etcd中底层调用了slice方法
-	// 这里不建议对pb.EntryType_EntryNormal进行判断
+	// 遍历所有日志条目
 	// reference: https://github.com/etcd-io/raft/blob/main/log.go#L491
 	entries = append(entries, l.entries...)
 
@@ -112,9 +112,9 @@ func (l *RaftLog) unstableEntries() []pb.Entry {
 	// Your Code Here (2A).DONE
 	// 注意防止slice下标越界
 	if len(l.entries) > 0 {
-		return l.entries[l.stabled-l.firstIndex+1:]
+		return l.entries[l.stabled-l.firstIndex+1:] // 从stable的下一条日志开始
 	} else {
-		return nil
+		return nil // 没有初始化log
 	}
 }
 
@@ -141,16 +141,26 @@ func (l *RaftLog) nextEnts() (ents []pb.Entry) {
 func (l *RaftLog) LastIndex() uint64 {
 	// Your Code Here (2A).DONE
 	// 先检查pendingSnapshot 是否存在，如果有则返回pendingSnapshot 的最后一条记录
-	// 否则返回stabled中的最后一条
-	// etcd中也是首先尝试从 unstable 部分获取最后一个条目的索引
+	// 如果没有则返回当前内存中entries的最后一条
+	// 如果内存entries没有初始化，从磁盘中读取最后一条记录
+	// etcd中首先尝试从 unstable 部分获取最后一个条目的索引
+	// 但是etcd是先检索entries中的最新一条日志，检索不到再查询snapshot的lastIndex,
+	// etcd的设计思想：优先考虑内存中的日志条目，因为它们通常比快照更新，并且检索它们更快
+	// 从这个函数可以看出不同的设计方案的决策：
+	// 优先选择读取速度：如果最常访问的是内存中的日志条目，那么像 etcd 那样优先检查这些条目可能更有效。
+	// 优先选择状态同步：如果系统经常进行大规模的状态同步，那么像 tinykv 那样优先考虑快照可能更合适。
 	// reference: https://github.com/etcd-io/raft/blob/main/log.go#L307
+	// reference: etcd检查unstable 的lastindex: https://github.com/etcd-io/raft/blob/main/log_unstable.go#L63
 	if !IsEmptySnap(l.pendingSnapshot) {
+		// 声明一下，如果存在pendingSnapshot, 说明集群的leader 发送过来最新的状态机状态要求本机快速同步
+		// 同时意味着本机已经断开链接很久时间，跟不上进度，所以会优先查pendingSnapshot
 		return l.pendingSnapshot.Metadata.Index // snapshotmetadata 中包含了最后一条日志的term id 以及 log id
 	}
 	if len(l.entries) > 0 {
+		// 如果pendingSnapshot没有，那么查找内存中的entries
 		return l.entries[len(l.entries)-1].Index
 	}
-	i, err := l.storage.LastIndex()
+	i, err := l.storage.LastIndex() // 如果内存中没有数据，则从磁盘中查找
 	if err != nil {
 		return 0
 	}
@@ -162,6 +172,7 @@ func (l *RaftLog) LastIndex() uint64 {
 func (l *RaftLog) Term(i uint64) (uint64, error) {
 	// Your Code Here (2A).DONE
 	// 参考etcd term func
+	// etcd的做法是先查找snapshot 再查找unstable entries, 再找stable entries
 	// reference: https://github.com/etcd-io/raft/blob/main/log.go#L381
 	// 1 从内存获取 term, 如果存在的话
 	// 只要 i 在entries 的日志索引范围内
@@ -170,6 +181,7 @@ func (l *RaftLog) Term(i uint64) (uint64, error) {
 	}
 
 	// 2 检查pendingsnapshot 是否存在这个索引的日志
+	// 有可能查找的index来自leader发送的pendingsnapshot
 	// snapshot 保存了最后一个日志的index和term
 	if !IsEmptySnap(l.pendingSnapshot) && i == l.pendingSnapshot.Metadata.Index {
 		return l.pendingSnapshot.Metadata.Term, nil
