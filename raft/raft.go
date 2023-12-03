@@ -347,6 +347,7 @@ func (r *Raft) reset(term uint64) {
 	}
 
 	// 重置所有结点的进度, 和newraft函数内的差不多
+	// etcd内部会有重新创建map的举动，
 	for i, ptr := range r.Prs {
 		ptr.Match = 0                        // 节点假定它与其他节点没有任何日志条目是同步的
 		ptr.Next = r.RaftLog.LastIndex() + 1 // 当前节点计划下次发送给其他节点的日志条目的位置
@@ -362,6 +363,8 @@ func (r *Raft) reset(term uint64) {
 // becomeCandidate transform this peer's state to candidate
 func (r *Raft) becomeCandidate() {
 	// Your Code Here (2A).
+	// 参考etcd的becomecandidate func
+	//
 	// reference: https://github.com/etcd-io/raft/blob/main/raft.go#L873
 	if r.State == StateLeader {
 		panic(errors.New("invalid transition [leader -> candidate]")) // 不能从leader转移到candidate
@@ -369,6 +372,8 @@ func (r *Raft) becomeCandidate() {
 
 	r.reset(r.Term + 1)
 	r.Vote = r.id
+	r.votes = make(map[uint64]bool) // 初始化投票记录
+	r.votes[r.id] = true            // 自己给自己投票
 }
 
 // becomeLeader transform this peer's state to leader
