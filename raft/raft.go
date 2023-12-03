@@ -320,6 +320,14 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 }
 
 // reference: https://github.com/etcd-io/raft/blob/main/raft.go#L873
+//
+// 如果任期号与当前不同，说明开启新任期，重置投票，
+// 重置选举和心跳的时间进度，
+// 重新设置选举超时时间；这个字段在newraft函数内会初始化,
+// 如果存在leader转移，终止，
+// 重置所有结点的进度, 和newraft函数内的差不多,
+//
+//	正在进行的配置变更（由该节点发起）都应该被重置或放弃
 func (r *Raft) reset(term uint64) {
 	if r.Term != term { // 如果任期不同，说明已经开启了一个新任期
 		r.Vote = None // 意味着一个新的任期已经开始，选票重新设置为None
@@ -353,7 +361,12 @@ func (r *Raft) reset(term uint64) {
 // becomeCandidate transform this peer's state to candidate
 func (r *Raft) becomeCandidate() {
 	// Your Code Here (2A).
+	// reference: https://github.com/etcd-io/raft/blob/main/raft.go#L873
+	if r.State == StateLeader {
+		panic(errors.New("invalid transition [leader -> candidate]")) // 不能从leader转移到candidate
+	}
 
+	r.reset(r.Term + 1)
 }
 
 // becomeLeader transform this peer's state to leader
