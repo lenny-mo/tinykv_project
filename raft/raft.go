@@ -362,7 +362,7 @@ func (r *Raft) reset(term uint64) {
 
 // becomeCandidate transform this peer's state to candidate
 func (r *Raft) becomeCandidate() {
-	// Your Code Here (2A).
+	// Your Code Here (2A).DONE
 	// 参考etcd的becomecandidate func
 	//
 	// reference: https://github.com/etcd-io/raft/blob/main/raft.go#L873
@@ -379,7 +379,7 @@ func (r *Raft) becomeCandidate() {
 // becomeLeader transform this peer's state to leader
 func (r *Raft) becomeLeader() {
 	// Your Code Here (2A).
-	// NOTE: Leader should propose a noop entry on its term
+	// NOTE: Leader should propose a noop entry on its term	
 }
 
 // Step the entrance of handle message, see `MessageType`
