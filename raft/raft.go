@@ -243,6 +243,7 @@ func newRaft(c *Config) *Raft {
 // sendAppend sends an append RPC with new entries (if any) and the
 // current commit index to the given peer. Returns true if a message was sent.
 func (r *Raft) sendAppend(to uint64) bool {
+	// Your Code Here (2A).
 	return false
 }
 
@@ -315,8 +316,16 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	// reference: reset方法是becomefollower的重点
 	r.State = StateFollower
 	r.Lead = lead
-	r.Term = term
-	r.Vote = None // 意味着一个新的任期已经开始，选票重新设置为r
+	r.reset(term)
+}
+
+// reference: https://github.com/etcd-io/raft/blob/main/raft.go#L873
+func (r *Raft) reset(term uint64) {
+	if r.Term != term { // 如果任期不同，说明已经开启了一个新任期
+		r.Vote = None // 意味着一个新的任期已经开始，选票重新设置为None
+		r.Term = term
+	}
+
 	// 重置选举和心跳的时间进度
 	r.electionElapsed = 0
 	r.heartbeatElapsed = 0
@@ -327,10 +336,11 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 		r.leadTransferee = None
 		r.transferElapsed = 0
 	}
+
 	// 重置所有结点的进度, 和newraft函数内的差不多
 	for i, ptr := range r.Prs {
-		ptr.Match = 0 // 没有匹配记录
-		ptr.Next = r.RaftLog.LastIndex() + 1
+		ptr.Match = 0                        // 节点假定它与其他节点没有任何日志条目是同步的
+		ptr.Next = r.RaftLog.LastIndex() + 1 // 当前节点计划下次发送给其他节点的日志条目的位置
 		if i == r.id {
 			ptr.Match = r.RaftLog.LastIndex()
 		}
@@ -343,6 +353,7 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 // becomeCandidate transform this peer's state to candidate
 func (r *Raft) becomeCandidate() {
 	// Your Code Here (2A).
+
 }
 
 // becomeLeader transform this peer's state to leader
