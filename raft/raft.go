@@ -315,13 +315,13 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 	// reference: https://github.com/etcd-io/raft/blob/main/raft.go#L864
 	// reference: reset方法是becomefollower的重点
 	r.State = StateFollower
-	r.Lead = lead
 	r.reset(term)
+	r.Lead = lead // 在reset之后，因为rest会把当前leader设置为None
 }
 
 // reference: https://github.com/etcd-io/raft/blob/main/raft.go#L873
 //
-// 如果任期号与当前不同，说明开启新任期，重置投票，
+// 如果任期号与当前不同，说明开启新任期，重置投票，领导设置为None
 // 重置选举和心跳的时间进度，
 // 重新设置选举超时时间；这个字段在newraft函数内会初始化,
 // 如果存在leader转移，终止，
@@ -333,6 +333,7 @@ func (r *Raft) reset(term uint64) {
 		r.Vote = None // 意味着一个新的任期已经开始，选票重新设置为None
 		r.Term = term
 	}
+	r.Lead = None
 
 	// 重置选举和心跳的时间进度
 	r.electionElapsed = 0
@@ -367,6 +368,7 @@ func (r *Raft) becomeCandidate() {
 	}
 
 	r.reset(r.Term + 1)
+	r.Vote = r.id
 }
 
 // becomeLeader transform this peer's state to leader
