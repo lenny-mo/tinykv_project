@@ -326,8 +326,10 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 
 // reference: https://github.com/etcd-io/raft/blob/main/raft.go#L873
 //
-// 如果任期号与当前不同，说明开启新任期，重置投票，领导设置为None
-// 重置选举和心跳的时间进度，
+// 如果任期号与当前不同，说明开启新任期，重置投票；
+//
+// 领导设置为None
+// 重置选举和心跳的时间进度；
 // 重新设置选举超时时间: 这个字段在newraft函数内会初始化;
 //
 // 如果存在leader转移，终止，
@@ -391,9 +393,59 @@ func (r *Raft) becomeLeader() {
 		panic(errors.New("invalid transition [follower -> leader]"))
 	}
 
+	// 一旦候选人赢得了选举，它就会转变为领导者。在这个转变过程中，它的任期号 r.Term 不会发生变化。它继续使用在选举开始时增加的任期号。
+	// 重置结点的状态，并且把leader设置为自己
+	r.reset(r.Term)
 	r.State = StateLeader
 	r.Lead = r.id
 
+	// 添加一个空的日志条目。这是为了强制 Raft 提交到当前的任期号。
+	// 这个行为和开头的should propose a noop entry 是一样的
+	currentLastIndex := r.RaftLog.LastIndex()
+	noopEntry := pb.Entry{
+		Term:      r.Term,
+		Index:     currentLastIndex + 1,
+		Data:      []byte{},
+		EntryType: pb.EntryType_EntryNormal, // 默认0就是normal
+	}
+	r.RaftLog.entries = append(r.RaftLog.entries, noopEntry)
+
+	// 发送noopEntry到其他的结点
+	// TODO: 下面的这个操作考虑做成原子操作, 比如有可能断电，导致消息发送后但是没有更新结点的进度
+	// 类似两阶段提交
+	for i := range r.Prs {
+		if i == r.id {
+			continue
+		}
+		r.sendAppend(i)
+	}
+
+	// 进度更新
+	// 在etcd 代码中，pr.BecomeReplicate() 会默认直接从LastIndex+1 日志开始发送
+	// 而不是检查follower是否已经和自己同步到lastIndex
+	// 在我们的代码中，我也是这样操作
+	for i := range r.Prs {
+		if i == r.id {
+			r.Prs[i].Match = currentLastIndex + 1
+			r.Prs[i].Next = currentLastIndex + 2
+		} else {
+			// 默认其他结点和自己同步的Index是0
+			r.Prs[i].Next = currentLastIndex + 2
+		}
+	}
+
+	// 针对单结点的raft集群，提交它的最新Index, 如果不添加，
+	// leader 无法提交（commit）任何新的日志条目
+	if len(r.Prs) == 1 {
+		r.RaftLog.committed = r.Prs[r.id].Match
+	}
+
+	// 针对集群更改日志的变动
+	// 参考etcd，
+	// 这行代码的意思是：将等待应用的配置更改的索引更新为当前日志中最新条目的索引。
+	// 简单来说，它在告诉 Raft 节点：“我们有一个新的配置更改需要处理，它就在我们日志的最末端。”
+	// 这是一种安全措施，在新的配置更改被复制到足够多的节点之前，不会有新的配置更改被提出
+	r.PendingConfIndex = currentLastIndex
 }
 
 // Step the entrance of handle message, see `MessageType`
