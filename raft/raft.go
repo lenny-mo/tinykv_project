@@ -116,9 +116,9 @@ func (c *Config) validate() error {
 
 // Progress represents a follower’s progress in the view of the leader. Leader maintains
 // progresses of all followers, and sends entries to the follower based on its progress.
+// Match追随者已知的与领导者一致的最高日志条目的索引，
+// Next 领导者下一次尝试发送给追随者的日志条目的索引
 type Progress struct {
-	// Match追随者已知的与领导者一致的最高日志条目的索引
-	// Next 领导者下一次尝试发送给追随者的日志条目的索引
 	Match, Next uint64
 }
 
@@ -328,7 +328,8 @@ func (r *Raft) becomeFollower(term uint64, lead uint64) {
 //
 // 如果任期号与当前不同，说明开启新任期，重置投票，领导设置为None
 // 重置选举和心跳的时间进度，
-// 重新设置选举超时时间；这个字段在newraft函数内会初始化,
+// 重新设置选举超时时间: 这个字段在newraft函数内会初始化;
+//
 // 如果存在leader转移，终止，
 // 重置所有结点的进度, 和newraft函数内的差不多,
 //
@@ -377,14 +378,22 @@ func (r *Raft) becomeCandidate() {
 
 	r.reset(r.Term + 1)
 	r.Vote = r.id
-	r.votes = make(map[uint64]bool) // 初始化投票记录
-	r.votes[r.id] = true            // 自己给自己投票
+	r.votes[r.id] = true // 自己给自己投票
 }
 
 // becomeLeader transform this peer's state to leader
 func (r *Raft) becomeLeader() {
 	// Your Code Here (2A).
-	// NOTE: Leader should propose a noop entry on its term
+	// NOTE: Leader should propose a noop entry on its
+	//
+	// reference: https://github.com/etcd-io/raft/blob/main/raft.go#L902
+	if r.State == StateFollower {
+		panic(errors.New("invalid transition [follower -> leader]"))
+	}
+
+	r.State = StateLeader
+	r.Lead = r.id
+
 }
 
 // Step the entrance of handle message, see `MessageType`
