@@ -385,7 +385,7 @@ func (r *Raft) becomeCandidate() {
 
 // becomeLeader transform this peer's state to leader
 func (r *Raft) becomeLeader() {
-	// Your Code Here (2A).
+	// Your Code Here (2A).DONE
 	// NOTE: Leader should propose a noop entry on its
 	//
 	// reference: https://github.com/etcd-io/raft/blob/main/raft.go#L902
