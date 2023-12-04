@@ -200,6 +200,11 @@ func newRaft(c *Config) *Raft {
 		RaftLog:          newLog(c.Storage),          // 创建 Raft 日志，并设置存储引擎
 	}
 
+	// 避免transfer timeout 没有设置
+	if raft.transferTimeout == 0 {
+		raft.transferTimeout = raft.heartbeatTimeout * 3
+	}
+
 	// 读取持久化状态和集群的配置信息
 	hardstate, confstate, err := raft.RaftLog.storage.InitialState()
 	if err != nil {
@@ -379,7 +384,7 @@ func (r *Raft) becomeCandidate() {
 // becomeLeader transform this peer's state to leader
 func (r *Raft) becomeLeader() {
 	// Your Code Here (2A).
-	// NOTE: Leader should propose a noop entry on its term	
+	// NOTE: Leader should propose a noop entry on its term
 }
 
 // Step the entrance of handle message, see `MessageType`
