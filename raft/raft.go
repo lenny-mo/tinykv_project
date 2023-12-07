@@ -248,8 +248,56 @@ func newRaft(c *Config) *Raft {
 // sendAppend sends an append RPC with new entries (if any) and the
 // current commit index to the given peer. Returns true if a message was sent.
 func (r *Raft) sendAppend(to uint64) bool {
-	// Your Code Here (2A).
-	return false
+	// Your Code Here (2A).DONE
+	// etcd 在这个函数有三个步骤
+	// 	- 1. 获取要发送的日志片段的最后一条日志的索引和term
+	// 	- 2. 如果获取日志失败,则构造snapshot消息发送
+	// 	- 3. 发送日志条目给其他节点后,更新对应节点的 Progress 信息
+	//
+	// reference: https://github.com/etcd-io/raft/blob/main/raft.go#L591
+	// 1 根据Progress中的Next字段获取前一条日志的term，这个是为了给follower 校验
+	lastIndex, nextIndex := r.Prs[to].Next-1, r.Prs[to].Next
+	lastTerm, errt := r.RaftLog.Term(lastIndex)
+
+	if errt != nil { // 2 如果在获取NExt前一个日志的时候出错，发送snapshot
+		snapshot, err := r.RaftLog.storage.Snapshot()
+		if err != nil {
+			return false // 发送失败
+		}
+		msg := pb.Message{
+			MsgType:  pb.MessageType_MsgSnapshot, // 在'sendAppend'中，如果领导者无法获取Term或Entries， 领导者将通过发送'MessageType_MsgSnapshot'类型的消息请求快照。
+			To:       to,
+			From:     r.id,
+			Term:     r.Term,
+			Snapshot: &snapshot,
+			Commit:   r.RaftLog.committed,
+		}
+		r.msgs = append(r.msgs, msg)
+		r.Prs[to].Next = snapshot.Metadata.Index + 1 // 更新next，match不确定，不好更新
+		return true
+	}
+
+	// 3 构造日志slice发送给目标结点，并且更新结点进度
+	// etcd 中获取的时候是从Next字段开始往后取，直到达到单条消息承载的最大日志条数
+	// 在这里我们直接从next开始往后一直遍历到entries末尾
+	ents := []*pb.Entry{}
+
+	// 获取next log在entries 中的下标
+	for i := nextIndex - r.RaftLog.firstIndex; i < uint64(len(r.RaftLog.entries)); i++ {
+		ents = append(ents, &r.RaftLog.entries[i])
+	}
+	msg := pb.Message{
+		MsgType: pb.MessageType_MsgAppend, // 包含要复制的日志条目
+		From:    r.id,
+		To:      to,
+		Commit:  r.RaftLog.committed,
+		LogTerm: lastTerm,
+		Index:   lastIndex,
+		Entries: ents,
+	}
+	r.msgs = append(r.msgs, msg)
+	r.Prs[to].Next = r.RaftLog.LastIndex() + 1 // 因为已经把从next开始的所有日志都发送，所以要下次要从last+1开始
+	return true
 }
 
 // sendHeartbeat sends a heartbeat RPC to the given peer.
