@@ -302,8 +302,26 @@ func (r *Raft) sendAppend(to uint64) bool {
 
 // sendHeartbeat sends a heartbeat RPC to the given peer.
 func (r *Raft) sendHeartbeat(to uint64) {
-	// Your Code Here (2A).
+	// Your Code Here (2A).DONE
+	// 根据etcd 的描述，在发送heartbeat的时候需要求对方match和自身commit的最小值
+	// 防止follower对于尚未匹配的日志进行强制提交，有可能会破坏一致性
+	// 同时，心跳包要求数据量尽可能的小
+	//
+	// reference: https://github.com/etcd-io/raft/blob/main/raft.go#L669
+	var sendCommit uint64
+	if r.RaftLog.committed > r.Prs[to].Match {
+		sendCommit = r.Prs[to].Match
+	} else {
+		sendCommit = r.RaftLog.committed
+	}
 
+	msg := pb.Message{
+		MsgType: pb.MessageType_MsgHeartbeat,
+		To:      to,
+		Commit:  sendCommit,
+		From:    r.id,
+	}
+	r.msgs = append(r.msgs, msg)
 }
 
 // tick advances the internal logical clock by a single tick.
@@ -323,7 +341,7 @@ func (r *Raft) tick() {
 		if r.leadTransferee != None {
 			r.triggerTransfer()
 		}
-		r.heartbeat() // 发送心跳
+		r.triggerHeartbeat() // 发送心跳
 	}
 }
 
@@ -352,7 +370,7 @@ func (r *Raft) triggerTransfer() {
 	}
 }
 
-func (r *Raft) heartbeat() {
+func (r *Raft) triggerHeartbeat() {
 	r.heartbeatElapsed++
 	if r.heartbeatElapsed >= r.heartbeatTimeout {
 		// 发送心跳包 发送leader心跳信息
@@ -515,7 +533,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 
 // handleHeartbeat handle Heartbeat RPC request
 func (r *Raft) handleHeartbeat(m pb.Message) {
-	// Your Code Here (2A).
+	//
 }
 
 // handleSnapshot handle Snapshot RPC request
