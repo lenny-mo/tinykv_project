@@ -320,6 +320,7 @@ func (r *Raft) sendHeartbeat(to uint64) {
 		To:      to,
 		Commit:  sendCommit,
 		From:    r.id,
+		Term:    r.Term,
 	}
 	r.msgs = append(r.msgs, msg)
 }
@@ -527,13 +528,65 @@ func (r *Raft) Step(m pb.Message) error {
 }
 
 // handleAppendEntries handle AppendEntries RPC request
+//
+// follower 响应 leader 的心跳包
 func (r *Raft) handleAppendEntries(m pb.Message) {
 	// Your Code Here (2A).
+
 }
 
 // handleHeartbeat handle Heartbeat RPC request
 func (r *Raft) handleHeartbeat(m pb.Message) {
+	// Your Code Here (2A).DONE
+	// etcd的响应分为两步：
+	// 1 根据心跳包，判断是否应该根据心跳包来更新当前follower的commit
+	// 如果心跳包中的commit远超过当前的unstable entries，报错
+	// 这也是为什么在发送心跳包的时候要求min(prs.Match, commit)
+	// 2 发送一条响应信息给leader
 	//
+	// reference: https://github.com/etcd-io/raft/blob/main/raft.go#L1773
+
+	// 1. 判断任期是否有效，如果无效拒绝
+	if r.Term > m.Term { // return reject
+		msg := pb.Message{
+			MsgType: pb.MessageType_MsgHeartbeatResponse,
+			Reject:  true,
+			To:      m.From,
+			From:    r.id,
+			Term:    r.Term,
+		}
+		r.msgs = append(r.msgs, msg)
+		return
+	}
+
+	// 2. 判断commit 是否超过lastIndex, 如果超过则报错
+	if m.Commit > r.RaftLog.LastIndex() {
+		// 报错
+		msg := pb.Message{
+			MsgType: pb.MessageType_MsgHeartbeatResponse,
+			Reject:  true,
+			To:      m.From,
+			From:    r.id,
+			Term:    r.Term,
+		}
+		r.msgs = append(r.msgs, msg)
+		return
+	}
+	r.RaftLog.committed = m.Commit
+
+	// 3. 重置election elapsed
+	r.Lead = m.From
+	r.electionElapsed = 0
+
+	// 4. 发送响应信息
+	msg := pb.Message{
+		MsgType: pb.MessageType_MsgHeartbeatResponse,
+		Reject:  false,
+		To:      m.From,
+		From:    r.id,
+		Term:    r.Term,
+	}
+	r.msgs = append(r.msgs, msg)
 }
 
 // handleSnapshot handle Snapshot RPC request
