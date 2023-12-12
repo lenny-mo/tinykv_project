@@ -256,6 +256,8 @@ func (r *Raft) sendAppend(to uint64) bool {
 	//
 	// reference: https://github.com/etcd-io/raft/blob/main/raft.go#L591
 	// 1 根据Progress中的Next字段获取前一条日志的term，这个是为了给follower 校验
+	// 在这个上下文中，Match 表示 follower 已经匹配的日志条目的最大索引，而不是待发送的最后一个索引。
+	// 所以为了更清晰地区分两者的含义，通常会选择用 Next-1 来表示 follower 上次匹配的最后一个日志条目的索引。
 	lastIndex, nextIndex := r.Prs[to].Next-1, r.Prs[to].Next
 	lastTerm, errt := r.RaftLog.Term(lastIndex)
 
@@ -529,13 +531,75 @@ func (r *Raft) Step(m pb.Message) error {
 
 // handleAppendEntries handle AppendEntries RPC request
 //
-// follower 响应 leader 的心跳包
+// 处理之前的sendAppend函数
 func (r *Raft) handleAppendEntries(m pb.Message) {
 	// Your Code Here (2A).
+	// 根据etcd，这个函数有三个步骤
+	// 1. 如果收到的日志索引小于已提交的最新日志索引，说明这个日志已经被提交了，直接向消息来源发送已提交的最新日志索引。
+	// 2. 尝试将收到的日志条目追加到本节点的日志中，如果追加成功，则向消息来源发送已追加的最新日志索引。
+	// 2.1 在 maybeAppend() 方法中，follower 会进一步检查消息的 term 是否匹配当前的 term
+	// 3. 如果日志追加失败，记录拒绝消息，并返回一个提示信息给消息来源，以便 Leader 能够得知日志匹配的最大 (index, term) 的猜测值，以便快速匹配日志。
+	// 如果追加成功，返回消息
+	//
+	// reference: handleAppendEntries https://github.com/etcd-io/raft/blob/main/raft.go#L1733
+	// reference: maybeAppend https://github.com/etcd-io/raft/blob/main/log.go#L109
+
+	// 1. 判断leader 发送的append entries 的 index(leader记录的和当前结点的日志匹配索引) 是否小于当前的committd
+	// 如果小于，返回消息并且附加当前的committed信息，并且告知leader 你的消息已经过时
+	if m.Index < r.RaftLog.committed {
+		msg := pb.Message{
+			MsgType: pb.MessageType_MsgAppendResponse,
+			Index:   r.RaftLog.committed,
+			To:      m.From,
+			From:    r.id,
+			Reject:  true,
+		}
+		r.msgs = append(r.msgs, msg)
+		return
+	}
+
+	// 2. 尝试把消息的日志append 到当前结点的entries, 参考maybeAppend
+	// 如果 index 超过当前结点的lastIndex, 告诉leader, 发送 lastIndex+1给我
+	if m.Index > r.RaftLog.LastIndex() {
+		msg := pb.Message{
+			To:      m.From,
+			From:    r.id,
+			Reject:  true,
+			MsgType: pb.MessageType_MsgAppendResponse,
+			Index:   r.RaftLog.LastIndex() + 1,
+		}
+		r.msgs = append(r.msgs, msg)
+		return
+	}
+
+	// 判断消息的Index(当前结点和leader match的日志索引) 是否和leader 的term相同
+	if t, err := r.RaftLog.Term(m.Index); err != nil || t != m.Term {
+		msg := pb.Message{
+			To:      m.From,
+			From:    r.id,
+			MsgType: pb.MessageType_MsgAppendResponse,
+			Reject:  true,
+		}
+		r.msgs = append(r.msgs, msg)
+		return
+	}
+
+	r.electionElapsed = 0 // 重新倒计时
+	r.Lead = m.From
+
+	//日志追加成功
+	msg := pb.Message{
+		To:      m.From,
+		From:    r.id,
+		MsgType: pb.MessageType_MsgAppendResponse,
+	}
+	r.msgs = append(r.msgs, msg)
 
 }
 
 // handleHeartbeat handle Heartbeat RPC request
+//
+// follower 响应 leader 的心跳包
 func (r *Raft) handleHeartbeat(m pb.Message) {
 	// Your Code Here (2A).DONE
 	// etcd的响应分为两步：
