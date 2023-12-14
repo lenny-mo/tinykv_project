@@ -293,7 +293,7 @@ func (r *Raft) sendAppend(to uint64) bool {
 		From:    r.id,
 		To:      to,
 		Commit:  r.RaftLog.committed,
-		LogTerm: lastTerm,
+		LogTerm: lastTerm, // 当前leader结点的日志中记录的lastindex 对应的任期, 后续发给follower的时候用于对比是否和follower的一只
 		Index:   lastIndex,
 		Entries: ents,
 	}
@@ -558,8 +558,11 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		return
 	}
 
+	r.electionElapsed = 0 // 重新倒计时
+	r.Lead = m.From       // 设置为当前leader
+
 	// 2. 尝试把消息的日志append 到当前结点的entries, 参考maybeAppend
-	// 如果 index 超过当前结点的lastIndex, 告诉leader, 发送 lastIndex+1给我
+	// 如果 index 超过当前结点的lastIndex, 说明发送的日志不连续，告诉leader, 发送 lastIndex+1给我
 	if m.Index > r.RaftLog.LastIndex() {
 		msg := pb.Message{
 			To:      m.From,
@@ -573,28 +576,48 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 	}
 
 	// 判断消息的Index(当前结点和leader match的日志索引) 是否和leader 的term相同
+	// 如果在这个过程中发生意外，需要返回一条拒绝给Leader，并且返回hint index和 hint term给leader，具体的
+	// 算法参考了etcd的handleAppendEntries
 	if t, err := r.RaftLog.Term(m.Index); err != nil || t != m.Term {
+		// 处理日志错误
+		// 出现问题的时候，需要返回一个提示信息，参考etcd的 findConflictByTerm 函数
+		// reference:https://github.com/etcd-io/raft/blob/main/log.go#L178
+		hintIndex := min(m.Index, r.RaftLog.LastIndex())
+		hintIndex, hintTerm := r.RaftLog.findConflictByTerm(hintIndex, m.LogTerm)
 		msg := pb.Message{
 			To:      m.From,
 			From:    r.id,
 			MsgType: pb.MessageType_MsgAppendResponse,
 			Reject:  true,
+			Index:   hintIndex,
+			LogTerm: hintTerm,
+			Term:    r.Term,
 		}
 		r.msgs = append(r.msgs, msg)
 		return
 	}
 
-	r.electionElapsed = 0 // 重新倒计时
-	r.Lead = m.From
-
-	//日志追加成功
+	// 经过上述的错误检测，日志追加成功之后，返送成功信息给leader
 	msg := pb.Message{
 		To:      m.From,
 		From:    r.id,
 		MsgType: pb.MessageType_MsgAppendResponse,
 	}
 	r.msgs = append(r.msgs, msg)
+}
 
+// copy from https://github.com/etcd-io/raft/blob/main/log.go#L178
+func (l *RaftLog) findConflictByTerm(index uint64, term uint64) (uint64, uint64) {
+	for ; index > 0; index-- {
+		// 如果出现错误（可能是 ErrCompacted 或 ErrUnavailable），我们无法确定是否匹配，
+		// 所以假设可能匹配并返回索引，其中 0 term 表示未知的任期。
+		if ourTerm, err := l.Term(index); err != nil {
+			return index, 0
+		} else if ourTerm <= term {
+			return index, ourTerm
+		}
+	}
+	return 0, 0
 }
 
 // handleHeartbeat handle Heartbeat RPC request
