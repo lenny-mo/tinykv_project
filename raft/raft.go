@@ -533,7 +533,7 @@ func (r *Raft) Step(m pb.Message) error {
 //
 // 处理之前的sendAppend函数
 func (r *Raft) handleAppendEntries(m pb.Message) {
-	// Your Code Here (2A).
+	// Your Code Here (2A).DONE
 	// 根据etcd，这个函数有三个步骤
 	// 1. 如果收到的日志索引小于已提交的最新日志索引，说明这个日志已经被提交了，直接向消息来源发送已提交的最新日志索引。
 	// 2. 尝试将收到的日志条目追加到本节点的日志中，如果追加成功，则向消息来源发送已追加的最新日志索引。
@@ -570,6 +570,7 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 			Reject:  true,
 			MsgType: pb.MessageType_MsgAppendResponse,
 			Index:   r.RaftLog.LastIndex() + 1,
+			Term:    r.Term,
 		}
 		r.msgs = append(r.msgs, msg)
 		return
@@ -582,6 +583,10 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 		// 处理日志错误
 		// 出现问题的时候，需要返回一个提示信息，参考etcd的 findConflictByTerm 函数
 		// reference:https://github.com/etcd-io/raft/blob/main/log.go#L178
+		// 这行代码首先计算 follower 自己日志的最后一个索引和 AppendEntries 中带的索引中的最小值作为一个提示索引。
+		// 这个最小索引保证是 follower 自己日志中一定存在的一个索引。
+		// 接着在这个提示索引处查找与 AppendEntries 中的 term 不匹配的第一个条目,并返回这个条目的索引和 term。
+		// 这样就可以高效地找到 follower 自己日志与 leader 日志开始不一致的位置。
 		hintIndex := min(m.Index, r.RaftLog.LastIndex())
 		hintIndex, hintTerm := r.RaftLog.findConflictByTerm(hintIndex, m.LogTerm)
 		msg := pb.Message{
@@ -589,19 +594,53 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 			From:    r.id,
 			MsgType: pb.MessageType_MsgAppendResponse,
 			Reject:  true,
-			Index:   hintIndex,
-			LogTerm: hintTerm,
+			Index:   hintIndex, // 表示 follower 自己日志中最后一条日志的索引
+			LogTerm: hintTerm,  // 表示该索引位置的日志条目的任期号
 			Term:    r.Term,
 		}
 		r.msgs = append(r.msgs, msg)
 		return
 	}
 
-	// 经过上述的错误检测，日志追加成功之后，返送成功信息给leader
+	// 3. 经过上述的错误检测，进行日志追加
+	// 找到新添加日志条目和现有日志之间的冲突索引
+	// 将冲突索引后的日志追加到日志中
+	//
+	// reference: https://github.com/etcd-io/raft/blob/main/log.go#L109
+	// 找到当前日志和leader日志的第一条冲突日志
+	conflictIndex := r.RaftLog.findConflict(m.Entries)
+	// 把从conflict位置开始的后续所有日志都添加到当前的日志中,此时就要调用truncateAndAppend函数
+	// 如果conflict位置就在当前日志的最后 说明日志是连续的 直接把日志append就行
+	// 如果conflict位置在当前日志的中间 则截断当前日志 使用拓展表达式
+
+	// 如果conflictIndex == 0 把leader的日志全部添加到当前结点的日志
+	if conflictIndex == 0 {
+		for _, v := range m.Entries {
+			r.RaftLog.entries = append(r.RaftLog.entries, *v)
+		}
+	} else {
+		// 把从冲突位置开始的日志添加进入当前结点的entries
+		beginIndex := m.Index + 1 // leader发过来的日志中的第一条的index
+		// 如果conflictIndex不为零，则把从冲突位置开始的日志都添加到当前结点的日志中
+		for _, v := range m.Entries[conflictIndex-beginIndex:] {
+			r.RaftLog.entries = append(r.RaftLog.entries, *v)
+		}
+	}
+
+	// 更新当前结点的committed
+	latestIndex := m.Index + uint64(len(m.Entries)) // 添加完所有entries之后，当前结点的lastIndex
+	minCommitted := min(m.Commit, latestIndex)
+	if minCommitted > r.RaftLog.committed {
+		r.RaftLog.committed = minCommitted
+	}
+
+	// 返回添加成功消息
 	msg := pb.Message{
 		To:      m.From,
 		From:    r.id,
 		MsgType: pb.MessageType_MsgAppendResponse,
+		Index:   latestIndex,
+		Term:    r.Term,
 	}
 	r.msgs = append(r.msgs, msg)
 }
@@ -609,15 +648,35 @@ func (r *Raft) handleAppendEntries(m pb.Message) {
 // copy from https://github.com/etcd-io/raft/blob/main/log.go#L178
 func (l *RaftLog) findConflictByTerm(index uint64, term uint64) (uint64, uint64) {
 	for ; index > 0; index-- {
-		// 如果出现错误（可能是 ErrCompacted 或 ErrUnavailable），我们无法确定是否匹配，
-		// 所以假设可能匹配并返回索引，其中 0 term 表示未知的任期。
 		if ourTerm, err := l.Term(index); err != nil {
+			// 如果在某个索引位置获取任期号失败,直接返回这个索引和0任期
 			return index, 0
 		} else if ourTerm <= term {
+			// 如果在某个索引位置的任期号 <= 输入的任期号term,则返回这个索引和任期
+			// 这意味着这个索引及之前的全部匹配
 			return index, ourTerm
 		}
 	}
 	return 0, 0
+}
+
+// 这个函数会在 Follower 端查找本地日志和 Leader 提供的日志之间第一个冲突的位置,
+// 如果没有冲突则返回 0
+func (l *RaftLog) findConflict(ents []*pb.Entry) uint64 {
+	for _, ent := range ents {
+		if !l.matchTerm(ent.Index, ent.Term) {
+			return ent.Index
+		}
+	}
+	return 0
+}
+
+func (l *RaftLog) matchTerm(i, term uint64) bool {
+	t, err := l.Term(i)
+	if err != nil {
+		return false
+	}
+	return t == term
 }
 
 // handleHeartbeat handle Heartbeat RPC request
