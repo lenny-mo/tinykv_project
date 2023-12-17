@@ -521,11 +521,90 @@ func (r *Raft) becomeLeader() {
 // on `eraftpb.proto` for what msgs should be handled
 func (r *Raft) Step(m pb.Message) error {
 	// Your Code Here (2A).
+	// 参考etcd的step方法，可笑的是，etcd并不是根据当前结点的状态进行移动，而是根据消息的term和当前结点的temr
+	//
+	// reference: https://github.com/etcd-io/raft/blob/main/raft.go#L1051
+	// 在 Raft 中，当节点收到 Term 更高的消息时，需要将自身状态转变为 Follower。
+	// 因为该节点接收到了一个 Term 更高的 Leader 的消息，所以必须遵循新 Leader 的领导。
+	// 因此，对于 r.becomeFollower() 函数的调用，第二个参数 None 是用来表示当前 Leader 为 None，
+	// 因为节点将会根据收到的消息中的信息来指定新的 Leader，而不是将该消息中的来源节点 m.From 作为 Leader。
+	if m.Term > r.Term {
+		r.becomeFollower(m.Term, None)
+	}
+
+	// TODO
 	switch r.State {
 	case StateFollower:
+		r.stepFollower(m)
 	case StateCandidate:
+		r.stepCandidate(m)
 	case StateLeader:
+		r.stepLeader(m)
 	}
+	return nil
+}
+
+func (r *Raft) stepFollower(m pb.Message) error {
+	switch m.MsgType {
+	case pb.MessageType_MsgHup:
+		r.startElection() // todo
+	case pb.MessageType_MsgAppend:
+		r.handleAppendEntries(m)
+	case pb.MessageType_MsgRequestVote:
+		r.handleVote(m) // todo
+	case pb.MessageType_MsgSnapshot:
+		r.handleSnapshot(m) // 2C
+	case pb.MessageType_MsgHeartbeat:
+		r.handleHeartbeat(m)
+	}
+	return nil
+}
+
+func (r *Raft) stepCandidate(m pb.Message) {
+	switch m.MsgType {
+	case pb.MessageType_MsgAppend:
+		if m.Term >= r.Term {
+			r.becomeFollower(m.Term, m.From)
+			r.handleAppendEntries(m)
+		}
+	case pb.MessageType_MsgHup:
+		r.startElection()
+	case pb.MessageType_MsgRequestVoteResponse:
+		r.handleVote(m)
+	case pb.MessageType_MsgRequestVote:
+		r.handleVote(m)
+	case pb.MessageType_MsgHeartbeat:
+		r.handleHeartbeat(m)
+	}
+}
+
+func (r *Raft) stepLeader(m pb.Message) {
+	switch m.MsgType {
+	case pb.MessageType_MsgAppend:
+		if m.Term > r.Term {
+			r.becomeFollower(m.Term, m.From)
+			r.handleAppendEntries(m)
+		}
+	case pb.MessageType_MsgRequestVote:
+		r.handleVote(m)
+	case pb.MessageType_MsgHeartbeat:
+		r.handleHeartbeat(m)
+	case pb.MessageType_MsgBeat:
+		for id := range r.Prs {
+			r.sendHeartbeat(id)
+		}
+		r.heartbeatElapsed = 0
+	}
+}
+
+// TODO
+func (r *Raft) startElection() error {
+
+	return nil
+}
+
+// TODO
+func (r *Raft) handleVote(m pb.Message) error {
 	return nil
 }
 
