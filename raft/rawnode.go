@@ -71,6 +71,7 @@ type Ready struct {
 type RawNode struct {
 	Raft *Raft
 	// Your Data Here (2A).
+	// 用于在 HasReady() 函数中判断 node 是否 pending
 	softState *SoftState
 	hardstate *pb.HardState
 }
@@ -83,7 +84,7 @@ func NewRawNode(config *Config) (*RawNode, error) {
 		Raft: raft,
 		softState: &SoftState{
 			Lead:      raft.Lead,
-			RaftState: raft.State,
+			RaftState: raft.State, // 标识到底是follower, candidate 还是leader
 		},
 		hardstate: &pb.HardState{
 			Term:   raft.Term,
@@ -158,12 +159,34 @@ func (rn *RawNode) Step(m pb.Message) error {
 // Ready returns the current point-in-time state of this RawNode.
 func (rn *RawNode) Ready() Ready {
 	// Your Code Here (2A).
+
 	return Ready{}
 }
 
 // HasReady called when RawNode user need to check if any Ready pending.
 func (rn *RawNode) HasReady() bool {
 	// Your Code Here (2A).
+	// 1. 判断hardstate是否为空以及是否有更新的内容
+	raft := rn.Raft
+	rHardState := pb.HardState{
+		Term:   raft.Term,
+		Vote:   raft.Vote,
+		Commit: raft.RaftLog.committed,
+	}
+	// 检查硬状态是否有更新，如果有则表示有准备就绪的状态
+	if !IsEmptyHardState(rHardState) || isHardStateEqual(rHardState, *rn.hardstate) {
+		return true
+	}
+
+	if len(raft.RaftLog.unstableEntries()) > 0 || // 检查 Raft 日志中是否有未稳定的条目。未稳定的条目是指已经被追加到日志但尚未稳定（即未持久化到存储）的条目。
+		len(raft.RaftLog.nextEnts()) > 0 || // 已经提交但尚未被应用到状态机的日志条目。这些日志条目已经通过大多数的节点进行了提交，但当前节点还未将其应用到状态机。节点在应用这些已提交但尚未应用的日志条目后，会将其应用到状态机中去
+		len(raft.msgs) > 0 { // 有等待发送的消息
+		return true
+	}
+
+	if !IsEmptySnap(raft.RaftLog.pendingSnapshot) { // 有等待发送的snapshot
+		return true
+	}
 	return false
 }
 
