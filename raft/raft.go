@@ -520,7 +520,7 @@ func (r *Raft) becomeLeader() {
 // Step the entrance of handle message, see `MessageType`
 // on `eraftpb.proto` for what msgs should be handled
 func (r *Raft) Step(m pb.Message) error {
-	// Your Code Here (2A).
+	// Your Code Here (2A).DONE
 	// 参考etcd的step方法，可笑的是，etcd并不是根据当前结点的状态进行移动，而是根据消息的term和当前结点的temr
 	//
 	// reference: https://github.com/etcd-io/raft/blob/main/raft.go#L1051
@@ -597,14 +597,105 @@ func (r *Raft) stepLeader(m pb.Message) {
 	}
 }
 
-// TODO
 func (r *Raft) startElection() error {
+	// 参考etcd的tickElection
+	//
+	// reference: https://github.com/etcd-io/raft/blob/main/raft.go#L823
+	// 1. 变成candidate 并且更新选举计时器
+	// 在判断超过选举超时时间后，一般情况下不会立即将 r.electionElapsed 重置为 0，而是等待下一次的选举超时触发
+	r.becomeCandidate()
+	r.electionElapsed++
+
+	// 2. 遍历peer结点，给其他结点发送投票请求
+	if len(r.Prs) == 1 {
+		r.becomeLeader()
+		return nil
+	}
+
+	lastIndex := r.RaftLog.LastIndex()
+	lastIndexTerm, _ := r.RaftLog.Term(lastIndex)
+	for peer := range r.Prs {
+		if peer == r.id {
+			continue
+		}
+		msg := pb.Message{
+			MsgType: pb.MessageType_MsgRequestVote,
+			To:      peer,
+			From:    r.id,
+			Term:    r.Term,
+			Index:   lastIndex,
+			LogTerm: lastIndexTerm,
+		}
+		r.msgs = append(r.msgs, msg)
+	}
 
 	return nil
 }
 
-// TODO
 func (r *Raft) handleVote(m pb.Message) error {
+	// 1. 判断消息的term
+	if m.Term < r.Term {
+		msg := pb.Message{
+			MsgType: pb.MessageType_MsgRequestVoteResponse,
+			To:      m.From,
+			From:    r.id,
+			Reject:  true,
+			Term:    r.Term,
+		}
+		r.msgs = append(r.msgs, msg)
+		return nil
+	}
+
+	// 2. 判断是否投过票
+	if r.Vote != None && r.Vote != m.From {
+		msg := pb.Message{
+			MsgType: pb.MessageType_MsgRequestVoteResponse,
+			To:      m.From,
+			From:    r.id,
+			Term:    r.Term,
+			Reject:  true,
+		}
+		r.msgs = append(r.msgs, msg)
+		return nil
+	}
+
+	// 3. 判断双方是否日志一致
+	lastIndex := r.RaftLog.LastIndex()
+	lastIndexTerm, _ := r.RaftLog.Term(lastIndex)
+	if lastIndexTerm > m.Term {
+		msg := pb.Message{
+			MsgType: pb.MessageType_MsgRequestVoteResponse,
+			To:      m.From,
+			From:    r.id,
+			Term:    r.Term,
+			Reject:  true,
+		}
+		r.msgs = append(r.msgs, msg)
+		return nil
+	}
+
+	if lastIndex != m.Index {
+		msg := pb.Message{
+			MsgType: pb.MessageType_MsgRequestVoteResponse,
+			To:      m.From,
+			From:    r.id,
+			Term:    r.Term,
+			Reject:  true,
+		}
+		r.msgs = append(r.msgs, msg)
+		return nil
+	}
+
+	// 4. 给对方投票
+	r.Vote = m.From
+	r.electionElapsed = 0 // 重置计时器
+	msg := pb.Message{
+		MsgType: pb.MessageType_MsgRequestVoteResponse,
+		To:      m.From,
+		From:    r.id,
+		Term:    r.Term,
+	}
+	r.msgs = append(r.msgs, msg)
 	return nil
 }
 
